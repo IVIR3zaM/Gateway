@@ -9,8 +9,10 @@ crash.log
 crash.*.log
 .terraform.lock.hcl
 
-# Generated v2ray artifacts
-client-config.json
-v2ray-share.txt
+# Generated v2ray artifacts (live under aws/ and hetzner/ after apply)
+**/client-config.json
+**/v2ray-share.txt
+**/origin-cert.pem
+**/origin-key.pem
 
 .DS_Store

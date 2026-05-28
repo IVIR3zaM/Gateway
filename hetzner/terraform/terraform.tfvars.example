@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+# Or export the same values as TF_VAR_<name> in your shell.
+
+domain    = "example.com"
+subdomain = "gw"
+
+# Tokens — keep these out of git. terraform.tfvars is gitignored.
+hcloud_token         = "REPLACE_ME"
+cloudflare_api_token = "REPLACE_ME"
+
+# Optional: add your home IP if you want SSH access.
+# ssh_public_key   = "ssh-ed25519 AAAA... you@laptop"
+# ssh_allow_cidrs  = ["203.0.113.4/32"]
+
+# Optional: local IP→country database for offline flag lookups.
+# See README "Country flags" for free providers (IPinfo / DB-IP / MaxMind).
+# Must serve a .mmdb or .mmdb.gz directly.
+# geoip_mmdb_url = "https://ipinfo.io/data/free/country.mmdb?token=YOUR_TOKEN"
+
+# Optional tunables:
+# location     = "fsn1"
+# server_type  = "cx23"
+# ws_path      = "/stream"
+# speedtest_mb = 5

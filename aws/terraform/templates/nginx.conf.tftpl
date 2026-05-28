@@ -12,6 +12,12 @@ http {
     ''      close;
   }
 
+  # Compact log of WS handshakes used by gw-stats to map active clients to
+  # countries. CloudFront populates CloudFront-Viewer-Country for every
+  # request once the origin request policy forwards CloudFront-* headers
+  # (see cloudfront.tf — policy 33f36d7e-…).
+  log_format ws_handshake '$msec $http_cloudfront_viewer_country';
+
   server {
     listen 80 default_server;
     server_name _;
@@ -36,6 +42,7 @@ http {
 
     location ${ws_path} {
       if ($http_upgrade != "websocket") { return 404; }
+      access_log /var/log/nginx/ws-handshake.log ws_handshake;
       proxy_pass http://127.0.0.1:10000;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;

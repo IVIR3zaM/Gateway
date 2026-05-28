@@ -1,23 +1,25 @@
 #!/bin/bash
-# Collects host metrics + v2ray peer country codes and writes them to
-# /var/www/stats.json on a loop. Country lookup is done locally first via a
-# tiny on-disk cache; new IPs are batched against http://ip-api.com (free,
-# ~15 req/min — fine for a single-user gateway). Only the country code is
-# kept; peer IPs are never written to the JSON.
+# Collects host metrics + active client country codes and writes them to
+# /var/www/stats.json on a loop. CloudFront forwards a CloudFront-Viewer-Country
+# header on every request (origin request policy 33f36d7e-… in cloudfront.tf);
+# nginx logs that header per WS handshake, and we tally distinct codes from
+# the recent window. No IP-to-country lookup is needed and client IPs are
+# never stored — only the country code reaches /var/www/stats.json.
 set -uo pipefail
 
 OUT=/var/www/stats.json
 STATE=/var/lib/gw-stats
-CACHE=$STATE/ip-cc.tsv
 PREV_NET=$STATE/prev_net
 PREV_CPU=$STATE/prev_cpu
 
 INTERVAL=5
 BASELINE_MBPS=${baseline_mbps}
 V2RAY_PORT=10000
+# How far back (seconds) we look in the nginx WS handshake log.
+WS_LOG=/var/log/nginx/ws-handshake.log
+WS_LOG_WINDOW=900
 
 mkdir -p "$STATE"
-touch "$CACHE"
 
 read_cpu() {
   awk '/^cpu / {idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; print idle, total}' /proc/stat
@@ -57,44 +59,22 @@ while true; do
   fi
   echo "$rx $tx $ts" > "$PREV_NET"
 
-  # ---- v2ray established peers (remote IPs only, deduped) --------------
-  mapfile -t peers < <(
-    ss -Htn state established "sport = :$V2RAY_PORT" 2>/dev/null \
-      | awk '{print $4}' \
-      | sed -E 's/^\[?([0-9a-fA-F.:]+)\]?:[0-9]+$/\1/' \
-      | sort -u
-  )
-
-  ccs=()
-  to_lookup=()
-  for ip in "$${peers[@]}"; do
-    [ -z "$ip" ] && continue
-    cc=$(awk -v ip="$ip" -F'\t' '$1==ip {print $2; exit}' "$CACHE")
-    if [ -n "$cc" ]; then
-      ccs+=("$cc")
-    else
-      to_lookup+=("$ip")
-    fi
-  done
-
-  if [ "$${#to_lookup[@]}" -gt 0 ]; then
-    payload="["
-    for ip in "$${to_lookup[@]}"; do
-      payload+="{\"query\":\"$ip\",\"fields\":\"countryCode\"},"
-    done
-    payload="$${payload%,}]"
-    resp=$(curl -fsS --max-time 3 -H 'Content-Type: application/json' \
-      -d "$payload" http://ip-api.com/batch 2>/dev/null || echo "")
-    if [ -n "$resp" ]; then
-      mapfile -t got < <(printf '%s' "$resp" \
-        | sed -E 's/\},[[:space:]]*\{/}\n{/g' \
-        | sed -nE 's/.*"countryCode":"([A-Z]{2})".*/\1/p')
-      for i in "$${!to_lookup[@]}"; do
-        cc="$${got[i]:-XX}"
-        printf '%s\t%s\n' "$${to_lookup[i]}" "$cc" >> "$CACHE"
-        ccs+=("$cc")
-      done
-    fi
+  # ---- Active client country codes ----------------------------------------
+  # v2ray's TCP peers are all 127.0.0.1 (local nginx), so we recover the
+  # client country from nginx's WS handshake log, which records the
+  # CloudFront-Viewer-Country header for every upgrade request. We emit one
+  # entry per unique country code seen in the WS_LOG_WINDOW, capped at the
+  # number of currently-established v2ray connections.
+  active_count=$(ss -Htn state established "sport = :$V2RAY_PORT" 2>/dev/null | awk 'END{print NR+0}')
+  since=$((ts - WS_LOG_WINDOW))
+  if [ "$active_count" -gt 0 ] && [ -f "$WS_LOG" ]; then
+    mapfile -t ccs < <(
+      awk -v since="$since" '
+        $1+0 > since && $2 ~ /^[A-Z]{2}$/ { print $2 }
+      ' "$WS_LOG" | awk '!seen[$0]++' | head -n "$active_count"
+    )
+  else
+    ccs=()
   fi
 
   cc_json=""
