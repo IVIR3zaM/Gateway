@@ -16,10 +16,34 @@ locals {
     ws_path = var.ws_path
   })
 
+  # Approximate sustained network baseline per instance type, in Mbps.
+  # AWS publishes "up to N Gbps" with a lower sustained baseline; these are
+  # rough public figures for the "always available" share. Used only as a
+  # reference line in the stats panel — not a hard quota.
+  instance_baseline_mbps = {
+    "t3.nano"    = 32
+    "t3.micro"   = 64
+    "t3.small"   = 128
+    "t3.medium"  = 256
+    "t3.large"   = 512
+    "t3.xlarge"  = 1024
+    "t3.2xlarge" = 2048
+    "t3a.nano"   = 32
+    "t3a.micro"  = 64
+    "t3a.small"  = 128
+    "t3a.medium" = 256
+  }
+  baseline_mbps = lookup(local.instance_baseline_mbps, var.instance_type, 1000)
+
+  stats_script = templatefile("${path.module}/templates/stats.sh.tftpl", {
+    baseline_mbps = local.baseline_mbps
+  })
+
   user_data = templatefile("${path.module}/templates/user-data.sh.tftpl", {
     v2ray_config = local.v2ray_server_config
     nginx_config = local.nginx_config
     speedtest_mb = var.speedtest_mb
+    stats_script = local.stats_script
   })
 }
 
@@ -54,6 +78,7 @@ resource "aws_instance" "v2ray" {
   vpc_security_group_ids      = [aws_security_group.v2ray.id]
   associate_public_ip_address = true
   user_data                   = local.user_data
+  user_data_replace_on_change = true
 
   metadata_options {
     http_tokens   = "required"

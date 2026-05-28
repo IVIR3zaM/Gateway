@@ -16,6 +16,15 @@ data "aws_subnets" "default" {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
+
+  # Only count AWS-provisioned default subnets. Without this filter the
+  # data source also returns the subnet *we* create below — flipping
+  # has_existing_subnet to true on the next apply and triggering a destroy
+  # of the resource it just created.
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
 }
 
 locals {

@@ -58,6 +58,18 @@ resource "aws_cloudfront_distribution" "this" {
     compress                 = false
   }
 
+  # /stats.json — live host metrics JSON, never cache.
+  ordered_cache_behavior {
+    path_pattern             = "/stats.json"
+    target_origin_id         = local.ec2_origin_id
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # CachingDisabled
+    origin_request_policy_id = "216adef6-5c7f-47e4-b989-5492eafa07d3" # AllViewer
+    compress                 = true
+  }
+
   # /speedtest — random payload, never cache (we want real bytes from EC2).
   ordered_cache_behavior {
     path_pattern             = "/speedtest"

@@ -22,6 +22,22 @@
     dt { color: #888; }
     dd { margin: 0; font-variant-numeric: tabular-nums; }
     .err { color: #d33; }
+    section.stats {
+      margin-top: 2.5rem; padding-top: 1.25rem;
+      border-top: 1px solid #8884;
+    }
+    section.stats h2 { font-size: 1rem; margin: 0 0 0.75rem; color: #888; font-weight: 600; }
+    .bar {
+      position: relative; height: 0.6rem; background: #8882;
+      border-radius: 0.3rem; overflow: hidden; min-width: 6rem;
+    }
+    .bar > span {
+      position: absolute; inset: 0 auto 0 0; background: currentColor;
+      border-radius: 0.3rem; transition: width .4s ease;
+    }
+    .flags { font-size: 1.25rem; line-height: 1.4; letter-spacing: 0.15rem; }
+    .flags .empty { font-size: 0.9rem; color: #888; letter-spacing: 0; }
+    #stats-err { color: #d33; font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -35,6 +51,21 @@
     <dt>Download</dt><dd id="dl">—</dd>
     <dt>Status</dt><dd id="status">idle</dd>
   </dl>
+
+  <section class="stats" id="stats">
+    <h2>Server</h2>
+    <dl>
+      <dt>CPU</dt>
+      <dd><div class="bar"><span id="cpu-bar" style="width:0%"></span></div> <span id="cpu-txt">—</span></dd>
+      <dt>RAM</dt>
+      <dd><div class="bar"><span id="ram-bar" style="width:0%"></span></div> <span id="ram-txt">—</span></dd>
+      <dt>Network</dt>
+      <dd><div class="bar"><span id="net-bar" style="width:0%"></span></div> <span id="net-txt">—</span></dd>
+      <dt>Peers</dt>
+      <dd class="flags" id="peers"><span class="empty">none</span></dd>
+    </dl>
+    <p id="stats-err"></p>
+  </section>
 
   <script>
     const PING_URL = "/ping";
@@ -68,6 +99,52 @@
       const buf = await r.arrayBuffer();
       return { bytes: buf.byteLength, ms: performance.now() - t0 };
     }
+
+    const STATS_URL = "/stats.json";
+    const STATS_INTERVAL_MS = 5000;
+
+    const ccToFlag = (cc) => {
+      if (!cc || cc.length !== 2 || cc === "XX") return "🏳️";
+      return String.fromCodePoint(
+        ...[...cc.toUpperCase()].map(c => 0x1f1e6 + c.charCodeAt(0) - 65)
+      );
+    };
+
+    async function refreshStats() {
+      try {
+        const r = await fetch(`${STATS_URL}?t=${Date.now()}`, { cache: "no-store" });
+        if (!r.ok) throw new Error(`stats ${r.status}`);
+        const s = await r.json();
+
+        const cpuPct = Math.max(0, Math.min(100, s.cpu));
+        $("cpu-bar").style.width = `${cpuPct}%`;
+        $("cpu-txt").textContent = `${s.cpu.toFixed(1)}%`;
+
+        const memPct = (s.mem_used_kb / s.mem_total_kb) * 100;
+        $("ram-bar").style.width = `${memPct}%`;
+        const memUsedMb = (s.mem_used_kb / 1024).toFixed(0);
+        const memTotalMb = (s.mem_total_kb / 1024).toFixed(0);
+        $("ram-txt").textContent = `${memPct.toFixed(1)}% (${memUsedMb} / ${memTotalMb} MB)`;
+
+        const used = s.rx_mbps + s.tx_mbps;
+        const netPct = s.baseline_mbps > 0 ? Math.min(100, (used / s.baseline_mbps) * 100) : 0;
+        $("net-bar").style.width = `${netPct}%`;
+        $("net-txt").textContent =
+          `↓ ${s.rx_mbps.toFixed(2)} · ↑ ${s.tx_mbps.toFixed(2)} / ~${s.baseline_mbps} Mbps baseline`;
+
+        const peers = $("peers");
+        if (!s.connections || s.connections.length === 0) {
+          peers.innerHTML = '<span class="empty">none</span>';
+        } else {
+          peers.textContent = s.connections.map(ccToFlag).join(" ");
+        }
+        $("stats-err").textContent = "";
+      } catch (e) {
+        $("stats-err").textContent = `stats unavailable: ${e.message}`;
+      }
+    }
+    refreshStats();
+    setInterval(refreshStats, STATS_INTERVAL_MS);
 
     $("run").addEventListener("click", async () => {
       const btn = $("run");

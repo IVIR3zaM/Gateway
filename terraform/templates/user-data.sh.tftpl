@@ -26,3 +26,29 @@ systemctl enable --now nginx
 systemctl restart nginx
 systemctl enable --now v2ray
 systemctl restart v2ray
+
+# Stats collector — writes /var/www/stats.json on a 5s loop.
+install -d -m 0755 /usr/local/bin
+cat > /usr/local/bin/gw-stats.sh <<'STATS_SCRIPT'
+${stats_script}
+STATS_SCRIPT
+chmod 0755 /usr/local/bin/gw-stats.sh
+
+cat > /etc/systemd/system/gw-stats.service <<'STATS_UNIT'
+[Unit]
+Description=Gateway stats collector
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gw-stats.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+STATS_UNIT
+
+systemctl daemon-reload
+systemctl enable --now gw-stats

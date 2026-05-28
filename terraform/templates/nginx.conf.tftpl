@@ -22,6 +22,12 @@ http {
       return 200 "ok";
     }
 
+    location = /stats.json {
+      alias /var/www/stats.json;
+      add_header Cache-Control "no-store";
+      add_header Content-Type application/json;
+    }
+
     location = /speedtest {
       alias /var/www/speedtest.bin;
       add_header Cache-Control "no-store";
