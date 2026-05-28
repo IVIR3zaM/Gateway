@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gateway — link check</title>
+  <style>
+    :root { color-scheme: dark light; }
+    body {
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      max-width: 32rem; margin: 4rem auto; padding: 0 1rem;
+      line-height: 1.45;
+    }
+    h1 { margin-bottom: 0.25rem; }
+    p.sub { color: #888; margin-top: 0; }
+    button {
+      font: inherit; padding: 0.6rem 1.2rem; border-radius: 0.4rem;
+      border: 1px solid currentColor; background: transparent; cursor: pointer;
+    }
+    button[disabled] { opacity: 0.5; cursor: progress; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; }
+    dt { color: #888; }
+    dd { margin: 0; font-variant-numeric: tabular-nums; }
+    .err { color: #d33; }
+  </style>
+</head>
+<body>
+  <h1>Gateway link check</h1>
+  <p class="sub">Quick reachability + throughput test to the edge.</p>
+
+  <p><button id="run">Run test</button></p>
+
+  <dl id="out">
+    <dt>Latency</dt><dd id="lat">—</dd>
+    <dt>Download</dt><dd id="dl">—</dd>
+    <dt>Status</dt><dd id="status">idle</dd>
+  </dl>
+
+  <script>
+    const PING_URL = "/ping";
+    const SPEEDTEST_URL = "/speedtest";
+    const PING_SAMPLES = 5;
+
+    const $ = (id) => document.getElementById(id);
+    const fmtMs = (n) => `${n.toFixed(1)} ms`;
+    const fmtMbps = (bytes, ms) => {
+      const mbps = (bytes * 8) / (ms / 1000) / 1_000_000;
+      return `${mbps.toFixed(2)} Mbps (${(bytes / 1024 / 1024).toFixed(2)} MB in ${(ms / 1000).toFixed(2)} s)`;
+    };
+
+    async function ping() {
+      const samples = [];
+      for (let i = 0; i < PING_SAMPLES; i++) {
+        const t0 = performance.now();
+        const r = await fetch(`${PING_URL}?t=${Date.now()}-${i}`, { cache: "no-store" });
+        if (!r.ok) throw new Error(`ping ${r.status}`);
+        await r.text();
+        samples.push(performance.now() - t0);
+      }
+      samples.sort((a, b) => a - b);
+      return samples[Math.floor(samples.length / 2)]; // median
+    }
+
+    async function download() {
+      const t0 = performance.now();
+      const r = await fetch(`${SPEEDTEST_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`speedtest ${r.status}`);
+      const buf = await r.arrayBuffer();
+      return { bytes: buf.byteLength, ms: performance.now() - t0 };
+    }
+
+    $("run").addEventListener("click", async () => {
+      const btn = $("run");
+      btn.disabled = true;
+      $("lat").textContent = "…";
+      $("dl").textContent = "…";
+      $("status").textContent = "running";
+      $("status").classList.remove("err");
+      try {
+        const lat = await ping();
+        $("lat").textContent = fmtMs(lat);
+        const { bytes, ms } = await download();
+        $("dl").textContent = fmtMbps(bytes, ms);
+        $("status").textContent = "ok";
+      } catch (e) {
+        $("status").textContent = `error: ${e.message}`;
+        $("status").classList.add("err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "port": 10000,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "settings": {
+        "clients": [
+          { "id": "${uuid}", "alterId": 0 }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "${ws_path}" }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}

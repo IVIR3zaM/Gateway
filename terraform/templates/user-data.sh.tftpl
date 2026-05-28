@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euxo pipefail
+
+# curl and ca-certificates ship with AL2023 (as curl-minimal); only need nginx.
+dnf install -y nginx
+
+# Install v2ray (official v2fly installer).
+bash <(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
+
+install -d -m 0755 /usr/local/etc/v2ray
+cat > /usr/local/etc/v2ray/config.json <<'V2RAY_CONFIG'
+${v2ray_config}
+V2RAY_CONFIG
+
+# Speed-test payload: random bytes so CDNs / proxies can't compress it.
+install -d -m 0755 /var/www
+dd if=/dev/urandom of=/var/www/speedtest.bin bs=1M count=${speedtest_mb}
+chmod 0644 /var/www/speedtest.bin
+
+# Overwrite nginx config wholesale.
+cat > /etc/nginx/nginx.conf <<'NGINX_CONFIG'
+${nginx_config}
+NGINX_CONFIG
+
+systemctl enable --now nginx
+systemctl restart nginx
+systemctl enable --now v2ray
+systemctl restart v2ray

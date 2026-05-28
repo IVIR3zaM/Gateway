@@ -1,0 +1,16 @@
+.claude/
+.vscode/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+.terraform.lock.hcl
+
+# Generated v2ray artifacts
+client-config.json
+v2ray-share.txt
+
+.DS_Store
