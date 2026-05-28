@@ -20,7 +20,7 @@ public internet.
   CloudFront. The current setup expects them under an `AWS_PROFILE=personal`
   named profile.
 - Terraform `1.5.1` (pinned in `.tool-versions`).
-- The deploy region is hard-coded to `eu-central-1` (Frankfurt).
+- The default deploy region is `eu-central-1` (Frankfurt); override with `-var region=...`.
 
 ## Deploy
 
@@ -31,6 +31,31 @@ AWS_PROFILE=personal terraform plan                     # diff preview
 AWS_PROFILE=personal terraform apply                    # creates EC2 + S3 + CloudFront
 AWS_PROFILE=personal terraform output -raw vmess_share_link
 ```
+
+### Picking a different region
+
+The region is a Terraform variable. Pass it on the command line:
+
+```bash
+AWS_PROFILE=personal terraform apply -var region=eu-west-1
+```
+
+…or export it as an env var (Terraform reads `TF_VAR_<name>`):
+
+```bash
+export TF_VAR_region=us-east-1
+AWS_PROFILE=personal terraform apply
+```
+
+…or set it persistently in a `terraform.tfvars` file at `terraform/terraform.tfvars`:
+
+```hcl
+region = "ap-southeast-1"
+```
+
+The `ps` (display name) baked into the `vmess://` share link is
+`${name}-${region}` (e.g. `gateway-eu-central-1`), so it's easy to tell
+multiple deployments apart in your v2ray client.
 
 `apply` takes ~3–5 min total (most of it is CloudFront creation). After it
 returns, the share link is also written to `v2ray-share.txt` at the repo root,
@@ -75,13 +100,70 @@ EBS volume, S3 bucket (and the `index.html` inside), CloudFront distribution
 subnet. Note that the AWS account still exists; this only tears down what
 Terraform created.
 
-## Cost (rough, idle)
+## Cost (rough, idle, `eu-central-1`, May 2026 on-demand pricing)
 
-- EC2 `t3.small`: ~$15/mo
-- EBS 8 GB gp3: ~$0.70/mo
-- CloudFront: free tier covers 1 TB/mo egress + 10M requests
-  (`PriceClass_All` ≈ +15% per GB vs. `PriceClass_100`)
-- S3: pennies
+For a single instance left running 24/7 with light personal traffic:
+
+| Item | Detail | ~Monthly |
+|---|---|---|
+| EC2 `t3.small` | $0.0228/hr × 730 hr | **$16.64** |
+| Public IPv4 address | $0.005/hr × 730 hr (charged since Feb 2024) | **$3.65** |
+| EBS 8 GB gp3 | $0.0952/GB-mo × 8 GB | **$0.76** |
+| CloudFront egress | Always-free tier: 1 TB/mo + 10M HTTPS req | **$0.00** |
+| EC2 → CloudFront egress | Free (CloudFront-origin transfer is not billed) | **$0.00** |
+| S3 storage + requests | A handful of KB for `index.html` | **~$0.01** |
+| Route 53 / ACM / DNS | None — uses the default `*.cloudfront.net` host | **$0.00** |
+| **Total, idle** | | **≈ $21 / month** |
+
+Notes:
+
+- **Going over the CloudFront free tier** costs about $0.085/GB egress in
+  EU/US (PriceClass_All ≈ +15% vs PriceClass_100). 100 GB above the free
+  tier ≈ +$8.50/mo.
+- **Instance size**: `t3.small` is the default. Override with
+  `-var instance_type=...` (see "Picking an instance size" below).
+- **Different region**: prices above are Frankfurt. US regions (`us-east-1`,
+  `us-west-2`) are 5–10% cheaper for EC2; Asia-Pacific regions (Tokyo,
+  Singapore) run 15–25% more. Override with `-var region=...` (see above).
+- **Stopped instance**: stopping the EC2 instance still bills the EBS volume
+  and the public IPv4 reservation (~$4.40/mo). To stop charges entirely, run
+  `terraform destroy`.
+
+### Picking an instance size
+
+The EC2 size is the `instance_type` Terraform variable. Pass it on the
+command line:
+
+```bash
+AWS_PROFILE=personal terraform apply -var instance_type=t3.micro
+```
+
+…or as an env var, or in `terraform/terraform.tfvars` (same forms as
+`region` above):
+
+```hcl
+instance_type = "c6i.large"
+```
+
+Rough monthly cost of common picks (Frankfurt on-demand, 730 hrs/mo,
+**EC2 line only** — add ~$4.40 for the public IPv4 + EBS, and any
+CloudFront overage):
+
+| `instance_type` | vCPU | RAM | ~EC2 / mo | Notes |
+|---|---|---|---|---|
+| `t3.nano`   | 2 | 0.5 GB | **$3.80** | Too small — TLS + v2ray will swap/OOM under any real load. |
+| `t3.micro`  | 2 | 1 GB   | **$7.60** | Free tier eligible on new accounts. Fine for 1–2 light users. |
+| `t3.small` (default) | 2 | 2 GB | **$16.64** | Comfortable for a handful of friends/family. |
+| `t3.medium` | 2 | 4 GB   | **$33.29** | Headroom for ~10 users; bursts handle short spikes. |
+| `t3.large`  | 2 | 8 GB   | **$66.58** | Rarely needed unless you're saturating the CPU on TLS. |
+| `c6i.large` | 2 | 4 GB   | **$62.05** | Sustained CPU (no burst credits) — pick if you saw `t3.*` throttling. |
+| `c6i.xlarge`| 4 | 8 GB   | **$124.10** | Real bandwidth tier; only worth it if the network is the bottleneck. |
+| `c7g.large` (arm64) | 2 | 4 GB | **$54.75** | ~12% cheaper than `c6i.large`. **Requires** swapping the AMI to an arm64 build — not a drop-in change. |
+
+`t3.*` (burstable) is the right default for personal/shared use — the
+gateway is idle most of the time and bursts when someone actually
+streams. Switch to `c6i.*` only if `htop` on the box shows sustained
+100% CPU.
 
 ## Interpreting the speed-test page
 

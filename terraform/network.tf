@@ -20,7 +20,7 @@ data "aws_subnets" "default" {
 
 locals {
   has_existing_subnet = length(data.aws_subnets.default.ids) > 0
-  subnet_id = local.has_existing_subnet ? data.aws_subnets.default.ids[0] : aws_subnet.public[0].id
+  subnet_id           = local.has_existing_subnet ? data.aws_subnets.default.ids[0] : aws_subnet.public[0].id
 }
 
 resource "aws_subnet" "public" {

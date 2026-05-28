@@ -21,7 +21,7 @@ locals {
   # vmess:// share URL — base64(JSON of standard v2rayN spec).
   vmess_share_json = jsonencode({
     v    = "2"
-    ps   = "${var.name}-reza"
+    ps   = "${var.name}-${var.region}"
     add  = aws_cloudfront_distribution.this.domain_name
     port = "443"
     id   = random_uuid.vmess_id.result
