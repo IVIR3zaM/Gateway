@@ -19,7 +19,7 @@ terraform {
 
 # Default provider — Frankfurt. EC2, S3, and CloudFront resources all use this.
 provider "aws" {
-  region = "eu-central-1"
+  region = var.region
   default_tags {
     tags = {
       Project   = "gateway"

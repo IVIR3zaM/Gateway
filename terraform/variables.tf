@@ -4,6 +4,12 @@ variable "name" {
   default     = "gateway"
 }
 
+variable "region" {
+  description = "AWS region the EC2 origin lives in. CloudFront is global; the distribution and vmess share link don't change when this changes."
+  type        = string
+  default     = "eu-central-1"
+}
+
 variable "instance_type" {
   description = "EC2 instance type for the v2ray server."
   type        = string

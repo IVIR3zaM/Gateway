@@ -50,7 +50,7 @@ resource "aws_security_group" "v2ray" {
 resource "aws_instance" "v2ray" {
   ami                         = data.aws_ssm_parameter.al2023_ami.value
   instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.public.id
+  subnet_id                   = local.subnet_id
   vpc_security_group_ids      = [aws_security_group.v2ray.id]
   associate_public_ip_address = true
   user_data                   = local.user_data
