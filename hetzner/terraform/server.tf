@@ -56,7 +56,6 @@ locals {
     site_index_html = local.site_index_html
     origin_cert_pem = tls_self_signed_cert.origin.cert_pem
     origin_key_pem  = tls_private_key.origin.private_key_pem
-    geoip_mmdb_url  = var.geoip_mmdb_url == null ? "" : var.geoip_mmdb_url
   })
 }
 

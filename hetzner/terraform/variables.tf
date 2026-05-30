@@ -74,10 +74,3 @@ variable "debug_allow_cidrs" {
   type        = list(string)
   default     = []
 }
-
-variable "geoip_mmdb_url" {
-  description = "OPTIONAL direct URL to a country MMDB (.mmdb or .mmdb.gz). When set, user-data downloads it at boot and the stats collector uses it for IP→country lookups (offline, instant). When unset, the collector falls back to ip-api.com (rate-limited, sometimes shows white flags). Sources: see hetzner/README.md."
-  type        = string
-  default     = null
-  sensitive   = true
-}

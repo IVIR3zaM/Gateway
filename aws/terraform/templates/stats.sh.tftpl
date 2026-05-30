@@ -15,9 +15,11 @@ PREV_CPU=$STATE/prev_cpu
 INTERVAL=5
 BASELINE_MBPS=${baseline_mbps}
 V2RAY_PORT=10000
-# How far back (seconds) we look in the nginx WS handshake log.
+# How far back (seconds) we look in the nginx WS handshake log. Kept short
+# so a single user reconnecting doesn't accumulate stale entries — one
+# window covers ~one reconnect cycle.
 WS_LOG=/var/log/nginx/ws-handshake.log
-WS_LOG_WINDOW=900
+WS_LOG_WINDOW=60
 
 mkdir -p "$STATE"
 
@@ -62,16 +64,18 @@ while true; do
   # ---- Active client country codes ----------------------------------------
   # v2ray's TCP peers are all 127.0.0.1 (local nginx), so we recover the
   # client country from nginx's WS handshake log, which records the
-  # CloudFront-Viewer-Country header for every upgrade request. We emit one
-  # entry per unique country code seen in the WS_LOG_WINDOW, capped at the
-  # number of currently-established v2ray connections.
+  # CloudFront-Viewer-Country header for every upgrade request. The number
+  # of flags is the count of distinct countries in the window — not the
+  # socket count, since v2ray opens many TCP sockets per real user. We
+  # gate on at least one established peer to suppress ghost flags from
+  # a stale log after everyone disconnected.
   active_count=$(ss -Htn state established "sport = :$V2RAY_PORT" 2>/dev/null | awk 'END{print NR+0}')
   since=$((ts - WS_LOG_WINDOW))
   if [ "$active_count" -gt 0 ] && [ -f "$WS_LOG" ]; then
     mapfile -t ccs < <(
       awk -v since="$since" '
         $1+0 > since && $2 ~ /^[A-Z]{2}$/ { print $2 }
-      ' "$WS_LOG" | awk '!seen[$0]++' | head -n "$active_count"
+      ' "$WS_LOG" | awk '!seen[$0]++'
     )
   else
     ccs=()

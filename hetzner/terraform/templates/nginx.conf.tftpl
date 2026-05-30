@@ -13,11 +13,11 @@ http {
     ''      close;
   }
 
-  # Compact log of WS handshakes, used by gw-stats to map active clients to
-  # countries. Only the timestamp and the original client IP (forwarded by
-  # Cloudflare as CF-Connecting-IP) are recorded; the file is rotated by the
-  # default nginx logrotate.
-  log_format ws_handshake '$msec $http_cf_connecting_ip';
+  # Compact log of WS handshakes, used by gw-stats to count distinct active
+  # client countries. Cloudflare populates CF-IPCountry on every request; we
+  # log only that 2-letter code (no client IP) so the file leaks nothing
+  # personal and the stats collector needs no IP→geo lookup.
+  log_format ws_handshake '$msec $http_cf_ipcountry';
 
   # :80 — redirect everything to HTTPS. Only reachable from Cloudflare IPs
   # because of the Hetzner firewall.

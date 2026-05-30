@@ -12,11 +12,6 @@ cloudflare_api_token = "REPLACE_ME"
 # ssh_public_key   = "ssh-ed25519 AAAA... you@laptop"
 # ssh_allow_cidrs  = ["203.0.113.4/32"]
 
-# Optional: local IP→country database for offline flag lookups.
-# See README "Country flags" for free providers (IPinfo / DB-IP / MaxMind).
-# Must serve a .mmdb or .mmdb.gz directly.
-# geoip_mmdb_url = "https://ipinfo.io/data/free/country.mmdb?token=YOUR_TOKEN"
-
 # Optional tunables:
 # location     = "fsn1"
 # server_type  = "cx23"

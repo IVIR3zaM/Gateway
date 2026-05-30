@@ -3,7 +3,7 @@ set -euxo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y nginx curl ca-certificates iproute2 mmdb-bin file gzip
+apt-get install -y nginx curl ca-certificates iproute2
 
 # Install v2ray (official v2fly installer).
 bash <(curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
@@ -33,25 +33,6 @@ INDEX_HTML
 install -d -m 0755 /var/www
 dd if=/dev/urandom of=/var/www/speedtest.bin bs=1M count=${speedtest_mb}
 chmod 0644 /var/www/speedtest.bin
-
-# Optional offline GeoIP DB for the stats collector. If geoip_mmdb_url is set,
-# fetch it; the stats script will pick it up automatically. Supports plain
-# .mmdb or gzipped .mmdb.gz. Failures here are non-fatal — the script falls
-# back to ip-api.com.
-install -d -m 0755 /var/lib/gw-stats
-GEOIP_URL='${geoip_mmdb_url}'
-if [ -n "$GEOIP_URL" ]; then
-  TMP=$(mktemp /tmp/geo.XXXXXX)
-  if curl -fsSL --max-time 60 -o "$TMP" "$GEOIP_URL"; then
-    if file "$TMP" | grep -qi gzip; then
-      gunzip -c "$TMP" > /var/lib/gw-stats/geo.mmdb
-    else
-      mv "$TMP" /var/lib/gw-stats/geo.mmdb
-    fi
-    chmod 0644 /var/lib/gw-stats/geo.mmdb
-  fi
-  rm -f "$TMP"
-fi
 
 # Overwrite nginx config wholesale. Debian's default ships a sites-enabled
 # structure; we replace everything with a single file.

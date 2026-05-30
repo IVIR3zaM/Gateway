@@ -1,41 +1,26 @@
 #!/bin/bash
-# Collects host metrics + v2ray peer country codes and writes them to
-# /var/www/stats.json on a loop. Country lookup tries an offline MMDB first
-# ($MMDB), then a tiny on-disk cache for previous remote hits, then falls
-# back to a batched call against http://ip-api.com (free, ~15 req/min). Only
-# the country code is kept; peer IPs are never written to the JSON.
+# Collects host metrics + active client country codes and writes them to
+# /var/www/stats.json on a loop. Cloudflare forwards CF-IPCountry on every
+# request; nginx logs that code per WS handshake (see nginx.conf.tftpl), and
+# we tally distinct codes from the recent window. No IP→geo lookup is needed
+# and client IPs are never stored — only the country code reaches stats.json.
 set -uo pipefail
 
 OUT=/var/www/stats.json
 STATE=/var/lib/gw-stats
-CACHE=$STATE/ip-cc.tsv
-MMDB=$STATE/geo.mmdb
 PREV_NET=$STATE/prev_net
 PREV_CPU=$STATE/prev_cpu
 
 INTERVAL=5
 BASELINE_MBPS=${baseline_mbps}
 V2RAY_PORT=10000
-# How far back (seconds) we look in the nginx WS handshake log for client IPs.
-# Active WS connections are long-lived; this window only needs to cover the
-# time between two reconnects of the same client.
+# How far back (seconds) we look in the nginx WS handshake log. Kept short so
+# a single user reconnecting from rotating mobile IPs doesn't accumulate into
+# multiple flags — one window covers ~one reconnect cycle.
 WS_LOG=/var/log/nginx/ws-handshake.log
-WS_LOG_WINDOW=900
+WS_LOG_WINDOW=60
 
 mkdir -p "$STATE"
-touch "$CACHE"
-
-# Offline lookup against MMDB. Echoes a 2-letter code on stdout, or nothing
-# on miss. Handles both MaxMind/DB-IP schema (country/iso_code, nested) and
-# IPinfo schema (country, flat). Requires mmdblookup (Debian: mmdb-bin).
-mmdb_cc() {
-  local ip="$1" out
-  [ -f "$MMDB" ] || return 1
-  out=$(mmdblookup --file "$MMDB" --ip "$ip" country iso_code 2>/dev/null) \
-    || out=$(mmdblookup --file "$MMDB" --ip "$ip" country 2>/dev/null) \
-    || return 1
-  printf '%s' "$out" | sed -nE 's/.*"([A-Z]{2})".*/\1/p'
-}
 
 read_cpu() {
   awk '/^cpu / {idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; print idle, total}' /proc/stat
@@ -75,60 +60,21 @@ while true; do
   fi
   echo "$rx $tx $ts" > "$PREV_NET"
 
-  # ---- Active client IPs --------------------------------------------------
-  # v2ray's TCP peers are all 127.0.0.1 (local nginx), so we recover the real
-  # client IP from nginx's WS handshake log, which records the original
-  # Cloudflare-forwarded address. We show one flag per unique IP seen in the
-  # WS_LOG_WINDOW, capped at the number of currently-established connections.
+  # ---- Active client country codes -------------------------------------
+  # Only emit flags if v2ray has at least one established peer right now, so
+  # a stale handshake log doesn't produce ghost flags after everyone left.
+  # The count of flags is the number of distinct countries seen in the window
+  # — not the socket count, since v2ray opens many TCP sockets per real user.
   active_count=$(ss -Htn state established "sport = :$V2RAY_PORT" 2>/dev/null | awk 'END{print NR+0}')
   since=$((ts - WS_LOG_WINDOW))
   if [ "$active_count" -gt 0 ] && [ -f "$WS_LOG" ]; then
-    mapfile -t peers < <(
+    mapfile -t ccs < <(
       awk -v since="$since" '
-        $1+0 > since && $2 ~ /^[0-9a-fA-F.:]+$/ { print $2 }
-      ' "$WS_LOG" | awk '!seen[$0]++' | head -n "$active_count"
+        $1+0 > since && $2 ~ /^[A-Z]{2}$/ { print $2 }
+      ' "$WS_LOG" | awk '!seen[$0]++'
     )
   else
-    peers=()
-  fi
-
-  ccs=()
-  to_lookup=()
-  for ip in "$${peers[@]}"; do
-    [ -z "$ip" ] && continue
-    # 1) offline MMDB (instant, no network) ----------------------------------
-    cc=$(mmdb_cc "$ip" 2>/dev/null || true)
-    if [ -n "$cc" ]; then
-      ccs+=("$cc")
-      continue
-    fi
-    # 2) on-disk cache of previous remote hits ------------------------------
-    cc=$(awk -v ip="$ip" -F'\t' '$1==ip {print $2; exit}' "$CACHE")
-    if [ -n "$cc" ]; then
-      ccs+=("$cc")
-    else
-      to_lookup+=("$ip")
-    fi
-  done
-
-  if [ "$${#to_lookup[@]}" -gt 0 ]; then
-    payload="["
-    for ip in "$${to_lookup[@]}"; do
-      payload+="{\"query\":\"$ip\",\"fields\":\"countryCode\"},"
-    done
-    payload="$${payload%,}]"
-    resp=$(curl -fsS --max-time 3 -H 'Content-Type: application/json' \
-      -d "$payload" http://ip-api.com/batch 2>/dev/null || echo "")
-    if [ -n "$resp" ]; then
-      mapfile -t got < <(printf '%s' "$resp" \
-        | sed -E 's/\},[[:space:]]*\{/}\n{/g' \
-        | sed -nE 's/.*"countryCode":"([A-Z]{2})".*/\1/p')
-      for i in "$${!to_lookup[@]}"; do
-        cc="$${got[i]:-XX}"
-        printf '%s\t%s\n' "$${to_lookup[i]}" "$cc" >> "$CACHE"
-        ccs+=("$cc")
-      done
-    fi
+    ccs=()
   fi
 
   cc_json=""

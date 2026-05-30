@@ -126,10 +126,6 @@ Set at minimum:
 Optionally set `ssh_public_key` and `ssh_allow_cidrs` if you want a shell
 on the VM. Default is no SSH at all — the box is fully managed by user-data.
 
-Optionally set `geoip_mmdb_url` to a country MMDB so the landing page's
-connection flags resolve correctly without depending on `ip-api.com`. See
-**Country flags** below.
-
 `terraform.tfvars` is gitignored.
 
 ---
@@ -168,61 +164,74 @@ v2rayNG / Shadowrocket / etc.
 
 ## Country flags
 
-The landing page shows a small flag per active VMess connection. The flag
-comes from the country code of the peer's IP. By default the stats
-collector queries `http://ip-api.com` for each new IP — that works but is
-rate-limited (≈15 req/min) and sometimes drops responses, which is why you
-see white flags.
+The landing page shows one flag per distinct country currently connected.
+The country comes from Cloudflare's `CF-IPCountry` header (logged by nginx
+on every WS handshake), so there's no IP→country lookup, no third-party
+service, and no client IPs stored on disk. One real user = one flag, even
+if their mobile carrier rotates the source IP between reconnects.
 
-The clean fix is a local IP-to-country database (MMDB binary), which makes
-lookups offline and instant. Point Terraform at one by setting
-`geoip_mmdb_url` in `terraform.tfvars`. The URL must serve a `.mmdb` (or
-gzipped `.mmdb.gz`) directly — tarballs aren't unpacked.
+## Choosing a server size
 
-### Free MMDB sources (pick one)
+`server_type` in `terraform.tfvars` controls the VM size. Changing it forces
+a VM rebuild but **does not change the VMess link** — the UUID, FQDN, and
+WS path stay the same. Apply takes ~90s; Cloudflare's A record is updated
+automatically, so clients reconnect without re-importing the share link.
 
-**IPinfo — easiest, direct .mmdb URL.**
-1. Sign up at <https://ipinfo.io/signup> (free).
-2. Dashboard → **Access tokens** → copy your token.
-3. Set:
-   ```hcl
-   geoip_mmdb_url = "https://ipinfo.io/data/free/country.mmdb?token=YOUR_TOKEN"
-   ```
-   The 50k req/mo free quota only counts when our server hits the URL —
-   which is once per VM rebuild, so effectively never.
+Current sizes available in `fsn1` (Falkenstein) — server price only; add
+**€0.60/mo for the primary IPv4** and **€20/TB** for traffic over the
+included 20 TB. Live prices: `GET https://api.hetzner.cloud/v1/server_types`.
 
-**DB-IP Lite — direct .mmdb.gz URL.**
-1. Sign up at <https://db-ip.com/account/signup> (free, no payment info).
-2. <https://db-ip.com/db/lite.php> → **IP to Country Lite** → download
-   link is shown as a signed URL ending in `.mmdb.gz`.
-3. Paste that URL into `geoip_mmdb_url`.
+**Shared-CPU x86 (Intel) — default tier.** Cheapest. Default is `cx23`.
 
-**MaxMind GeoLite2 — most accurate but tarball.**
-The free GeoLite2-Country download is a `.tar.gz`, which our user-data
-doesn't unpack. To use MaxMind, host an extracted `.mmdb` yourself
-(e.g. on a private S3 bucket) and point `geoip_mmdb_url` at that.
+| name   | vCPU | RAM   | disk   | €/mo  |
+|--------|-----:|------:|-------:|------:|
+| cx23   | 2    | 4 GB  | 40 GB  | 4.95  |
+| cx33   | 4    | 8 GB  | 80 GB  | 8.05  |
+| cx43   | 8    | 16 GB | 160 GB | 14.87 |
+| cx53   | 16   | 32 GB | 320 GB | 27.89 |
 
-### Re-applying
+**Shared-CPU x86 (AMD).** Same shape, AMD silicon, usually a bit pricier.
 
-After setting the variable, `terraform apply` triggers a VM rebuild because
-user-data changed. After ~90s the stats collector starts using the local
-MMDB; existing flag-less connections get re-resolved on their next sample.
+| name   | vCPU | RAM   | disk   | €/mo  |
+|--------|-----:|------:|-------:|------:|
+| cpx11  | 2    | 2 GB  | 40 GB  | 6.81  |
+| cpx21  | 3    | 4 GB  | 80 GB  | 11.77 |
+| cpx31  | 4    | 8 GB  | 160 GB | 21.69 |
+| cpx41  | 8    | 16 GB | 240 GB | 40.29 |
+| cpx51  | 16   | 32 GB | 360 GB | 88.03 |
 
-### What if I forget to set it?
+**Shared-CPU ARM (Ampere).** Cheapest cores at a given RAM tier. Image
+must be ARM-compatible — `debian-12` works.
 
-You'll see white flags (the `XX` fallback) for any peer whose ip-api lookup
-fails. The gateway itself works fine — flags are cosmetic.
+| name   | vCPU | RAM   | disk   | €/mo  |
+|--------|-----:|------:|-------:|------:|
+| cax11  | 2    | 4 GB  | 40 GB  | 5.57  |
+| cax21  | 4    | 8 GB  | 80 GB  | 9.91  |
+| cax31  | 8    | 16 GB | 160 GB | 19.83 |
+| cax41  | 16   | 32 GB | 320 GB | 39.05 |
+
+**Dedicated-CPU x86 (`ccx*`).** Guaranteed cores, no noisy-neighbour. Only
+worth it if a shared SKU stops keeping up — for one-person v2ray traffic
+through a 1 Gbps NIC that's effectively never. Prices start at €19.83/mo
+(`ccx13`, 2 vCPU / 8 GB) and go up; check the API for the full list.
+
+For a personal gateway with one or two clients, **`cx23` is plenty** — v2ray
++ nginx + the stats collector idle at ~1% CPU and ~100 MB RAM. Upgrade only
+if `/stats.json` shows sustained high CPU or you push close to 1 Gbps.
 
 ## Operational notes
 
 - **Rotating the VMess UUID**: `terraform taint random_uuid.vmess_id && terraform apply`.
   That replaces the VM (~90s of downtime) and overwrites the share files.
+- **Resizing the VM**: edit `server_type` and `terraform apply`. Same
+  ~90s outage, same VMess link, no client changes needed. See
+  **Choosing a server size** above for the catalog.
 - **Changing user-data**: forces VM replacement, same as the AWS stack. The
   public IP changes too — Terraform updates the Cloudflare A record in the
   same apply, so clients reconnect automatically once propagation catches up
   (~30s through Cloudflare).
-- **Cost**: cx23 in fsn1 is ~€4.59/mo + €0.60/mo for the IPv4. Cloudflare
-  Free plan = €0. No CloudFront / S3 charges.
+- **Cost**: default `cx23` in fsn1 is ~€4.95/mo + €0.60/mo for the IPv4.
+  Cloudflare Free plan = €0. No CloudFront / S3 charges.
 - **Cloudflare ToS reminder**: §2.8 forbids tunneling non-HTML traffic over
   the free plan. Personal-scale v2ray-in-WS-in-TLS is indistinguishable from
   normal HTTPS in practice, but it's a real risk for heavy users. If you
@@ -237,6 +246,7 @@ fails. The gateway itself works fine — flags are cosmetic.
   Re-apply; the cert is generated by Terraform and lives in state.
 - **Site works, vmess doesn't**: check `ws_path` matches between
   `terraform.tfvars` and your client config. Both default to `/stream`.
-- **No `/stats.json` data**: the collector hits `ip-api.com` and rate-limits
-  at ~15 req/min. First connection from a new client IP can show `XX` until
-  the cache fills.
+- **No flags but connections work**: nginx isn't seeing `CF-IPCountry`.
+  Either Cloudflare proxying is off for the subdomain (orange-cloud must be
+  on) or the request is bypassing CF entirely (check the Hetzner firewall
+  still restricts :443 to Cloudflare IPs).
