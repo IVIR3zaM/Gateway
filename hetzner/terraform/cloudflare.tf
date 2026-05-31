@@ -19,6 +19,13 @@ resource "cloudflare_record" "gw" {
   proxied = true
   ttl     = 1 # "Auto" — required when proxied
   comment = "Gateway v2ray endpoint — managed by terraform"
+
+  # Don't repoint DNS until the new origin is actually serving (see readiness.tf).
+  depends_on = [null_resource.wait_for_origin]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Force Full SSL + websockets at the zone level so the gateway works regardless

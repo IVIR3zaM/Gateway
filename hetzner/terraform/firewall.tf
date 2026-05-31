@@ -30,16 +30,14 @@ resource "hcloud_firewall" "v2ray" {
     description = "HTTP from Cloudflare (redirected to HTTPS)"
   }
 
-  # SSH — empty by default, so :22 is closed unless ssh_allow_cidrs is set.
-  dynamic "rule" {
-    for_each = length(var.ssh_allow_cidrs) == 0 ? [] : [1]
-    content {
-      direction   = "in"
-      protocol    = "tcp"
-      port        = "22"
-      source_ips  = var.ssh_allow_cidrs
-      description = "SSH from operator CIDRs"
-    }
+  # SSH defaults to the operator's auto-detected public IP (see local_env.tf);
+  # override with var.ssh_allow_cidrs to pin specific CIDRs (e.g. from CI).
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "22"
+    source_ips  = local.effective_ssh_allow_cidrs
+    description = "SSH from operator CIDRs"
   }
 
   # ICMP — useful for debugging from anywhere, harmless.

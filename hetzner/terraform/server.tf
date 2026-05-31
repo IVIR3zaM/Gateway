@@ -60,22 +60,35 @@ locals {
 }
 
 resource "hcloud_ssh_key" "this" {
-  count      = var.ssh_public_key == null ? 0 : 1
+  count      = 1
   name       = "${var.name}-key"
-  public_key = var.ssh_public_key
+  public_key = local.effective_ssh_public_key
+}
+
+# Suffix rotates whenever user_data changes, so create_before_destroy can stand
+# up the replacement alongside the old VM (server names must be unique).
+resource "random_id" "server_suffix" {
+  byte_length = 2
+  keepers = {
+    user_data = local.user_data
+  }
 }
 
 resource "hcloud_server" "v2ray" {
-  name         = "${var.name}-v2ray"
+  name         = "${var.name}-v2ray-${random_id.server_suffix.hex}"
   server_type  = var.server_type
   image        = var.image
   location     = var.location
   user_data    = local.user_data
-  ssh_keys     = var.ssh_public_key == null ? [] : [hcloud_ssh_key.this[0].id]
+  ssh_keys     = [hcloud_ssh_key.this[0].id]
   firewall_ids = [hcloud_firewall.v2ray.id]
 
   labels = {
     project    = "gateway"
     managed-by = "terraform"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }

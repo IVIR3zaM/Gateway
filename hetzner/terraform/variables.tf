@@ -58,13 +58,19 @@ variable "speedtest_mb" {
 }
 
 variable "ssh_public_key" {
-  description = "OPTIONAL SSH public key (full line, e.g. 'ssh-ed25519 AAA... user@host'). Set to null to skip; you lose console-less recovery if you do."
+  description = "Override for the operator SSH public key. Default: read from ~/.ssh/id_ed25519.pub at plan time."
+  type        = string
+  default     = null
+}
+
+variable "ssh_private_key_path" {
+  description = "Override path to the matching SSH private key (used by the blue/green readiness gate). Default: ~/.ssh/id_ed25519."
   type        = string
   default     = null
 }
 
 variable "ssh_allow_cidrs" {
-  description = "CIDRs allowed to reach :22. Default is empty (SSH closed). Add your home IP/32 if you want shell access."
+  description = "Override CIDRs allowed to reach :22. Default: auto-detected operator public IP (see local_env.tf). Set explicitly if running from CI or want to pin a static range."
   type        = list(string)
   default     = []
 }
