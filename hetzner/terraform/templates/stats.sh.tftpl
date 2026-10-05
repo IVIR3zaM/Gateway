@@ -70,7 +70,7 @@ while true; do
   if [ "$active_count" -gt 0 ] && [ -f "$WS_LOG" ]; then
     mapfile -t ccs < <(
       awk -v since="$since" '
-        $1+0 > since && $2 ~ /^[A-Z]{2}$/ { print $2 }
+        $1+0 > since && $2 ~ /^[A-Z][A-Z]$/ { print $2 }
       ' "$WS_LOG" | awk '!seen[$0]++'
     )
   else
