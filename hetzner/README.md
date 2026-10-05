@@ -131,7 +131,10 @@ SSH is always on: the readiness gate in `readiness.tf` uses it to wait for
 the new VM before the DNS record moves. Port 22 opens only to your public
 IP, auto-detected at every plan; set `ssh_allow_cidrs` to pin a range
 instead. The key comes from `~/.ssh/id_rsa.pub` (and `~/.ssh/id_rsa` for the
-gate) unless you set `ssh_public_key` and `ssh_private_key_path`.
+gate) unless you set `ssh_public_key` and `ssh_private_key_path`. The key is
+set when the SSH key resource is created; later changes to it are ignored
+(`ignore_changes`), so a trailing newline or a different comment never
+replaces anything, and rotating it is a manual step.
 
 `terraform.tfvars` is gitignored.
 
@@ -265,7 +268,7 @@ Set up once, in the repository settings:
    | `SUBDOMAIN` | secret | `subdomain`, for example `gw` for `gw.example.com` |
    | `WS_PATH` | secret | `ws_path` |
    | `SSH_PRIVATE_KEY` | secret | written to a mode-600 file in the runner's temp dir; its path is `ssh_private_key_path` |
-   | `SSH_PUBLIC_KEY` | variable | `ssh_public_key`; must equal the key in the state, or the VM is replaced |
+   | `SSH_PUBLIC_KEY` | variable | `ssh_public_key`; the key the VM trusts (the one in the state); it must match `SSH_PRIVATE_KEY` |
    | `DISPATCH_TOKEN` | secret | `GH_TOKEN` for dispatching the Sonar and Kita deploys (see **App redeploys**) |
    | `R2_ACCESS_KEY_ID` | secret | `AWS_ACCESS_KEY_ID` for the R2 backend |
    | `R2_SECRET_ACCESS_KEY` | secret | `AWS_SECRET_ACCESS_KEY` for the R2 backend |

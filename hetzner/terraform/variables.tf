@@ -61,13 +61,13 @@ variable "speedtest_mb" {
 }
 
 variable "ssh_public_key" {
-  description = "Override for the operator SSH public key. Default: read from ~/.ssh/id_ed25519.pub at plan time."
+  description = "Override for the operator SSH public key. Default: read from ~/.ssh/id_rsa.pub at plan time."
   type        = string
   default     = null
 }
 
 variable "ssh_private_key_path" {
-  description = "Override path to the matching SSH private key (used by the blue/green readiness gate). Default: ~/.ssh/id_ed25519."
+  description = "Override path to the matching SSH private key (used by the blue/green readiness gate). Default: ~/.ssh/id_rsa."
   type        = string
   default     = null
 }

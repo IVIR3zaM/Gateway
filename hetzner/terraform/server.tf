@@ -60,9 +60,17 @@ locals {
 }
 
 resource "hcloud_ssh_key" "this" {
-  count      = 1
-  name       = "${var.name}-key"
-  public_key = local.effective_ssh_public_key
+  count = 1
+  name  = "${var.name}-key"
+  # file() keeps the trailing newline while CI's SSH_PUBLIC_KEY variable has
+  # none; public_key forces replacement, and under create_before_destroy the
+  # duplicate key is rejected by Hetzner (409 "SSH key not unique"). So trim it
+  # and ignore later changes. Rotating the key is a manual owner step.
+  public_key = trimspace(local.effective_ssh_public_key)
+
+  lifecycle {
+    ignore_changes = [public_key]
+  }
 }
 
 # Suffix rotates whenever user_data changes, so create_before_destroy can stand
