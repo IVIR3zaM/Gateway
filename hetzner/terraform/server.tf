@@ -82,6 +82,9 @@ resource "hcloud_server" "v2ray" {
   user_data    = local.user_data
   ssh_keys     = [hcloud_ssh_key.this[0].id]
   firewall_ids = [hcloud_firewall.v2ray.id]
+  # Other stacks on this VM (e.g. Kita) attach their own firewalls by label;
+  # without this, every apply here would try to detach them.
+  ignore_remote_firewall_ids = true
 
   labels = {
     project    = "gateway"
