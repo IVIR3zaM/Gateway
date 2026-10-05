@@ -63,7 +63,8 @@ can run both at once if you want to A/B them, but most users only need one.
 
 ## Prerequisites for either stack
 
-- Terraform ≥ 1.5 (the repo pins `1.5.1` in `.tool-versions`).
+- Terraform 1.16.5, pinned in `.tool-versions` (the Hetzner stack's R2
+  backend needs at least 1.10).
 - A v2ray client on the consuming devices — v2rayN (Windows), v2rayNG
   (Android), Shadowrocket (iOS), v2rayU (macOS), or anything that takes a
   `vmess://` URL.

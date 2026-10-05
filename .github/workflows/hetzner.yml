@@ -1,0 +1,241 @@
+name: Hetzner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hetzner/**"
+      - ".tool-versions"
+      - ".github/workflows/hetzner.yml"
+  workflow_dispatch:
+    inputs:
+      replace_server:
+        description: Replace the VM even when nothing changed (recovery; Sonar and Kita are redeployed after it)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hetzner/terraform
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the Terraform version from .tool-versions
+        id: tf
+        working-directory: .
+        run: |
+          version="$(awk '$1 == "terraform" { print $2 }' .tool-versions)"
+          if [ -z "$version" ]; then
+            echo "::error::.tool-versions has no terraform line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The wrapper would echo terraform's stdout into the step outputs and logs.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf.outputs.version }}
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  apply:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    # Applies queue instead of cancelling: an apply cut short can leave the R2 lock held.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: hetzner/terraform
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the Terraform version from .tool-versions
+        id: tf
+        working-directory: .
+        run: |
+          version="$(awk '$1 == "terraform" { print $2 }' .tool-versions)"
+          if [ -z "$version" ]; then
+            echo "::error::.tool-versions has no terraform line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The wrapper would echo terraform's stdout into the step outputs and logs.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tf.outputs.version }}
+          terraform_wrapper: false
+
+      # An empty secret or variable would fall back to a default or to "" (an empty subdomain puts the A record
+      # on the apex), so stop before terraform runs.
+      - name: Check the required inputs are set
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DOMAIN: ${{ secrets.DOMAIN }}
+          SUBDOMAIN: ${{ secrets.SUBDOMAIN }}
+          WS_PATH: ${{ secrets.WS_PATH }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          SSH_PUBLIC_KEY: ${{ vars.SSH_PUBLIC_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          missing=0
+          for name in HCLOUD_TOKEN CLOUDFLARE_API_TOKEN DOMAIN SUBDOMAIN WS_PATH SSH_PRIVATE_KEY DISPATCH_TOKEN \
+            R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY SSH_PUBLIC_KEY R2_ACCOUNT_ID R2_BUCKET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is empty: set it in the production environment."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      # An empty TF_VAR_ would override the variable's default with "", so only set ones are exported.
+      - name: Export the optional variables
+        env:
+          NAME: ${{ vars.NAME }}
+          LOCATION: ${{ vars.LOCATION }}
+          SERVER_TYPE: ${{ vars.SERVER_TYPE }}
+          IMAGE: ${{ vars.IMAGE }}
+          SPEEDTEST_MB: ${{ vars.SPEEDTEST_MB }}
+        run: |
+          export_if_set() {
+            if [ -n "$2" ]; then echo "TF_VAR_$1=$2" >> "$GITHUB_ENV"; fi
+          }
+          export_if_set name "$NAME"
+          export_if_set location "$LOCATION"
+          export_if_set server_type "$SERVER_TYPE"
+          export_if_set image "$IMAGE"
+          export_if_set speedtest_mb "$SPEEDTEST_MB"
+
+      - name: Write the backend config and SSH key
+        env:
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          {
+            echo "bucket    = \"$R2_BUCKET\""
+            echo "endpoints = { s3 = \"https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com\" }"
+          } > backend.hcl
+          key="$RUNNER_TEMP/gateway_deploy_key"
+          (umask 077 && printf '%s\n' "$SSH_PRIVATE_KEY" > "$key")
+          chmod 600 "$key"
+          echo "TF_VAR_ssh_private_key_path=$key" >> "$GITHUB_ENV"
+
+      - name: terraform init
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      # An empty state means the backend is wrong or the state was never migrated; an apply would then create a
+      # second VM and a second DNS record next to the running ones.
+      - name: Check the state is not empty
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          state="$(terraform state list)"
+          if [ -z "$state" ]; then
+            echo "::error::Terraform state is empty: state not migrated to R2 or wrong backend. An apply would create a second VM and DNS record. Refusing to apply."
+            exit 1
+          fi
+
+      # Empty when the state predates the server_id output; the apps are then redeployed to be safe. The id stays
+      # in a runner file: step outputs and env: values are printed in the public log, unmasked.
+      - name: Record the current server
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: terraform output -raw server_id 2>/dev/null > "$RUNNER_TEMP/server_id_before" || true
+
+      # Logs are public and a replacement diff prints the old IPv4 and IPv6, so the full plan stays on the runner
+      # and only resource addresses and actions are printed.
+      - name: terraform plan
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_domain: ${{ secrets.DOMAIN }}
+          TF_VAR_subdomain: ${{ secrets.SUBDOMAIN }}
+          TF_VAR_ws_path: ${{ secrets.WS_PATH }}
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          REPLACE_SERVER: ${{ inputs.replace_server }}
+        run: |
+          args=(-input=false -lock-timeout=10m -out="$RUNNER_TEMP/tfplan")
+          if [ "$REPLACE_SERVER" = "true" ]; then
+            args+=(-replace=random_id.server_suffix -replace=hcloud_server.v2ray)
+          fi
+          if ! terraform plan "${args[@]}" > "$RUNNER_TEMP/plan.log" 2>&1; then
+            sed -E -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' -e 's/\[id=[^]]*\]/[id=x]/g' "$RUNNER_TEMP/plan.log"
+            exit 1
+          fi
+          terraform show -json "$RUNNER_TEMP/tfplan" | jq -r '
+            .resource_changes[]
+            | select(.change.actions != ["no-op"])
+            | "\(.address): \(.change.actions | join(", "))"'
+
+      # The readiness gate's SSH line prints the new VM's IPv4, unknown before apply, so it cannot be masked; the
+      # filter replaces every IPv4 and every resource id instead. The closing Outputs: block would print the
+      # unmasked server id, so the filter drops it; -no-color keeps its header matchable.
+      - name: terraform apply
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -o pipefail
+          terraform apply -input=false -no-color -lock-timeout=10m "$RUNNER_TEMP/tfplan" 2>&1 \
+            | sed -u -E -e '/^Outputs:/,$d' -e 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' -e 's/\[id=[^]]*\]/[id=x]/g'
+
+      # Only the boolean leaves this step; both ids stay in shell variables.
+      - name: Check whether the server was replaced
+        id: after
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          before="$(cat "$RUNNER_TEMP/server_id_before")"
+          after="$(terraform output -raw server_id)"
+          if [ -z "$before" ] || [ "$before" != "$after" ]; then
+            echo "replaced=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "replaced=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A new VM has neither app installed; a redundant dispatch is only a no-op redeploy.
+      - name: Redeploy Sonar and Kita
+        if: steps.after.outputs.replaced == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          gh workflow run ci.yml -R "$OWNER/Sonar" -f ref=main
+          gh workflow run ci.yml -R "$OWNER/Kita" -f ref=main
+          echo "::notice::The VM was replaced or its previous server was unknown: dispatched the Sonar and Kita deploys."

@@ -32,11 +32,13 @@ resource "hcloud_firewall" "v2ray" {
 
   # SSH defaults to the operator's auto-detected public IP (see local_env.tf);
   # override with var.ssh_allow_cidrs to pin specific CIDRs (e.g. from CI).
+  # The CIDRs are sensitive because a CI plan swaps the owner's last local IPv4
+  # for the runner's, and the diff would print it in the public Actions log.
   rule {
     direction   = "in"
     protocol    = "tcp"
     port        = "22"
-    source_ips  = local.effective_ssh_allow_cidrs
+    source_ips  = sensitive(local.effective_ssh_allow_cidrs)
     description = "SSH from operator CIDRs"
   }
 

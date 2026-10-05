@@ -16,7 +16,11 @@ so the only way in is through Cloudflare.
 1. A Hetzner Cloud **project** and an **API token** (read+write).
 2. A Cloudflare account with `example.com` as an active zone.
 3. A Cloudflare **API token** scoped to that zone.
-4. Terraform ≥ 1.5.
+4. Terraform 1.16.5, the version pinned in the root `.tool-versions` (at
+   least 1.10, which the R2 backend's lock file needs). A state written by
+   1.16 is unreadable by 1.5, so don't apply with an older binary.
+5. A Cloudflare R2 bucket and R2 API token for the Terraform state (see
+   **State backend (Cloudflare R2)**).
 
 Steps 1–3 are below.
 
@@ -123,10 +127,64 @@ Set at minimum:
 - `hcloud_token         = "hcloud_…"`
 - `cloudflare_api_token = "…"`
 
-Optionally set `ssh_public_key` and `ssh_allow_cidrs` if you want a shell
-on the VM. Default is no SSH at all — the box is fully managed by user-data.
+SSH is always on: the readiness gate in `readiness.tf` uses it to wait for
+the new VM before the DNS record moves. Port 22 opens only to your public
+IP, auto-detected at every plan; set `ssh_allow_cidrs` to pin a range
+instead. The key comes from `~/.ssh/id_rsa.pub` (and `~/.ssh/id_rsa` for the
+gate) unless you set `ssh_public_key` and `ssh_private_key_path`.
 
 `terraform.tfvars` is gitignored.
+
+---
+
+## State backend (Cloudflare R2)
+
+Gateway, Sonar and Kita share one private R2 bucket and one R2 API token
+(Object Read & Write on that bucket). Each project has its own key;
+Gateway's is `gateway/terraform.tfstate` (set in `providers.tf`). Terraform
+locks the state with a lock file next to it in the bucket, so a local run
+and a CI run never apply at the same time.
+
+1. In Cloudflare, create the private bucket once (or reuse the one Sonar or
+   Kita already uses) and an R2 API token scoped to it. Note the account ID,
+   the bucket name, and the token's access key ID and secret access key.
+2. Create the backend config (gitignored) and fill in the bucket, account ID,
+   and the token's two keys:
+
+   ```bash
+   cd hetzner/terraform
+   cp backend.hcl.example backend.hcl
+   chmod 600 backend.hcl
+   ```
+
+   Edit `backend.hcl` and replace the placeholders for `access_key`,
+   `secret_key`, `bucket` and `endpoints`.
+
+3. The R2 credentials in `backend.hcl` take precedence over any AWS_ACCESS_KEY_ID,
+   AWS_SECRET_ACCESS_KEY, AWS_PROFILE in the shell or `~/.aws`, so nothing is
+   exported and other AWS profiles and `~/.aws` stay untouched. A root initialized
+   before the keys were added is re-initialized once with:
+
+   ```bash
+   terraform init -reconfigure -backend-config=backend.hcl
+   ```
+
+   `backend.hcl` is gitignored and holds the R2 keys. Terraform keeps a copy
+   in the gitignored `.terraform/` directory and in any saved `-out` plan file,
+   so never share `backend.hcl`, `.terraform/` or `-out` files outside your
+   machine.
+
+4. One time only, if you already have a local `terraform.tfstate` from an
+   earlier apply, move it into R2:
+
+   ```bash
+   terraform init -migrate-state -backend-config=backend.hcl
+   ```
+
+   Answer yes to copy the state. Afterwards `terraform state list` must show
+   the server, the firewall, the DNS record and the rest of the stack; then
+   keep the old local state files only as a private backup. On a first-ever
+   apply there is nothing to migrate: Step 4's `init` is enough.
 
 ---
 
@@ -134,16 +192,19 @@ on the VM. Default is no SSH at all — the box is fully managed by user-data.
 
 ```bash
 cd hetzner/terraform
-terraform init
-terraform plan
-terraform apply
+terraform init -backend-config=backend.hcl
+terraform plan -lock-timeout=10m
+terraform apply -lock-timeout=10m
 ```
+
+With `backend.hcl` filled in (see above). `-lock-timeout=10m` makes a
+local run wait for a CI run that holds the lock, instead of failing.
 
 Expect:
 
 - 1 × `hcloud_server`
 - 1 × `hcloud_firewall`
-- 0–1 × `hcloud_ssh_key` (only if you set `ssh_public_key`)
+- 1 × `hcloud_ssh_key`
 - 1 × `cloudflare_record` (the `gw` A record)
 - 1 × `cloudflare_zone_settings_override` (zone-wide SSL + websockets)
 - a self-signed cert and key (TLS materials, not visible in CF/Hetzner)
@@ -159,6 +220,127 @@ curl -fsS https://gw.example.com/        # static landing page
 
 The `vmess://` link is in `hetzner/v2ray-share.txt`. Paste it into v2rayN /
 v2rayNG / Shadowrocket / etc.
+
+---
+
+## GitHub Actions
+
+`.github/workflows/hetzner.yml` (workflow `Hetzner`) has two jobs:
+
+- `validate` runs `terraform fmt -check -recursive`, `terraform init
+  -backend=false` and `terraform validate` in `hetzner/terraform`. It uses
+  no environment and no secret.
+- `apply` needs `validate` and runs in the `production` environment. It
+  plans and applies `hetzner/terraform` on the R2 backend, then redeploys
+  Sonar and Kita if the VM was replaced.
+
+Both jobs install the Terraform version from the root `.tool-versions`.
+
+What triggers a run:
+
+- **Push to main** that touches `hetzner/**`, `.tool-versions` or the
+  workflow file: validate, plan and apply.
+- **Dispatch:** Actions, Hetzner, Run workflow. Input `replace_server`
+  (default false) adds `-replace=random_id.server_suffix
+  -replace=hcloud_server.v2ray` to the plan, so the VM is rebuilt even when
+  nothing changed. It is the recovery tool for a broken VM and the way to
+  force a replacement. From the command line:
+
+  ```bash
+  gh workflow run hetzner.yml                        # plan and apply main
+  gh workflow run hetzner.yml -f replace_server=true # rebuild the VM
+  ```
+
+Set up once, in the repository settings:
+
+1. Create the environment `production` and limit its deployment branches to
+   `main`. The `apply` job runs in it.
+2. Add these secrets and variables to the `production` environment:
+
+   | Name | Kind | Terraform variable or use |
+   |---|---|---|
+   | `HCLOUD_TOKEN` | secret | `hcloud_token` |
+   | `CLOUDFLARE_API_TOKEN` | secret | `cloudflare_api_token` |
+   | `DOMAIN` | secret | `domain`, for example `example.com` |
+   | `SUBDOMAIN` | secret | `subdomain`, for example `gw` for `gw.example.com` |
+   | `WS_PATH` | secret | `ws_path` |
+   | `SSH_PRIVATE_KEY` | secret | written to a mode-600 file in the runner's temp dir; its path is `ssh_private_key_path` |
+   | `SSH_PUBLIC_KEY` | variable | `ssh_public_key`; must equal the key in the state, or the VM is replaced |
+   | `DISPATCH_TOKEN` | secret | `GH_TOKEN` for dispatching the Sonar and Kita deploys (see **App redeploys**) |
+   | `R2_ACCESS_KEY_ID` | secret | `AWS_ACCESS_KEY_ID` for the R2 backend |
+   | `R2_SECRET_ACCESS_KEY` | secret | `AWS_SECRET_ACCESS_KEY` for the R2 backend |
+   | `R2_ACCOUNT_ID` | variable | endpoint `https://<account-id>.r2.cloudflarestorage.com` in the generated `backend.hcl` |
+   | `R2_BUCKET` | variable | `bucket` in the generated `backend.hcl` |
+   | `NAME` | variable, optional | `name` |
+   | `LOCATION` | variable, optional | `location` |
+   | `SERVER_TYPE` | variable, optional | `server_type` |
+   | `IMAGE` | variable, optional | `image` |
+   | `SPEEDTEST_MB` | variable, optional | `speedtest_mb` |
+
+   Every non-optional name must be set: the job fails before terraform runs
+   and names the empty one (an empty `SUBDOMAIN` would put the A record on
+   the apex). An optional variable left unset keeps the Terraform default.
+   `ssh_allow_cidrs` is not set in CI, so port 22 opens to the runner's own
+   IPv4 for that run.
+
+How the apply job behaves:
+
+- **One at a time:** every run joins the `deploy` concurrency queue and
+  waits; none is cancelled, because an apply cut short could leave the R2
+  lock held.
+- **Empty-state guard:** after `terraform init` the job checks `terraform
+  state list`. If the state is empty (not migrated to R2, or the wrong bucket
+  or key) it fails before planning, because an apply would create a second
+  VM and DNS record.
+- **Lock:** plan and apply run with `-lock-timeout=10m`, so they wait for a
+  local run that holds the lock.
+- **Logs are public.** The repository is public, so anyone can read the
+  workflow logs. The full plan stays on the runner; the log shows only each
+  changed resource's address and actions. The apply log, and a failed
+  plan's output, have every IPv4 replaced by `x.x.x.x` and every resource
+  id replaced by `[id=x]`. Terraform outputs are never printed: the apply
+  log drops its closing `Outputs:` block, and the job reads only `server_id`, into a file on the runner, and passes on nothing
+  but whether it changed. Read outputs such as the share link from your
+  machine instead.
+- **Generated files:** the two `local_file` artifacts (`v2ray-share.txt`
+  and `client-config.json`) are re-created on the runner at every run and
+  never leave it. Run terraform locally to get them.
+
+### App redeploys
+
+A new VM has neither Sonar nor Kita installed. The job records the
+`server_id` output before the plan and compares it after the apply; when it
+changed, or was unknown before, it dispatches both apps' `ci.yml` with
+`ref=main`, which reinstalls them on the new VM. A redundant dispatch only
+redeploys the same commit.
+
+`DISPATCH_TOKEN` is a fine-grained personal access token limited to the
+repositories Sonar and Kita, with **Actions: Read and write** and nothing
+else. Give it an expiry and renew it before it lapses; an expired token
+fails the dispatch step after a successful apply, and you then run
+`gh workflow run ci.yml -f ref=main` in each app's repository.
+
+---
+
+## Coexistence with Sonar and Kita
+
+Sonar and Kita run on the same VM and keep their own state in the same R2
+bucket.
+
+- **Firewalls:** Sonar and Kita attach their own `sonar-ssh` and `kita-ssh`
+  firewalls to the server by label `project=gateway`.
+  `ignore_remote_firewall_ids` on `hcloud_server.v2ray` keeps a Gateway
+  apply from detaching them.
+- **Replacement window:** during a VM replacement two servers briefly carry
+  `project=gateway`. An app deploy in that window fails its
+  exactly-one-server check before changing anything; re-run it once the old
+  server is gone (the dispatch after the apply already runs after that).
+- **nginx:** the apps install `conf.d/sonar.conf` and `conf.d/kita.conf`,
+  which Gateway's `nginx.conf` includes. Together they must pass `nginx -t`;
+  keep server names and listen options compatible across the three projects
+  when changing the nginx config here.
+- **Lock:** local and CI runs of all three projects use the same bucket, and
+  runs on the same state queue on its R2 lock (up to `-lock-timeout=10m`).
 
 ---
 

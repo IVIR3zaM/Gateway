@@ -1,15 +1,23 @@
 output "server_ipv4" {
   description = "Hetzner public IPv4. Cloudflare A record points here."
   value       = hcloud_server.v2ray.ipv4_address
+  sensitive   = true
+}
+
+output "server_id" {
+  description = "Hetzner server ID. CI reads it to detect a VM replacement and redeploy the apps on it."
+  value       = hcloud_server.v2ray.id
 }
 
 output "fqdn" {
   description = "Public hostname for the static site, /speedtest, /stats.json, and v2ray WS."
   value       = local.fqdn
+  sensitive   = true
 }
 
 output "site_url" {
-  value = "https://${local.fqdn}/"
+  value     = "https://${local.fqdn}/"
+  sensitive = true
 }
 
 output "vmess_uuid" {
@@ -67,12 +75,12 @@ locals {
 
 resource "local_file" "vmess_share" {
   filename = "${path.module}/../v2ray-share.txt"
-  content  = "${local.vmess_share_link}\n"
+  content  = sensitive("${local.vmess_share_link}\n")
 }
 
 resource "local_file" "client_config" {
   filename = "${path.module}/../client-config.json"
-  content  = jsonencode(local.client_config)
+  content  = sensitive(jsonencode(local.client_config))
 }
 
 output "vmess_share_link" {

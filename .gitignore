@@ -7,7 +7,9 @@
 *.tfvars.json
 crash.log
 crash.*.log
-.terraform.lock.hcl
+hetzner/terraform/backend.hcl
+# Only the Hetzner stack tracks its provider lock file (CI runs it).
+aws/terraform/.terraform.lock.hcl
 
 # Generated v2ray artifacts (live under aws/ and hetzner/ after apply)
 **/client-config.json

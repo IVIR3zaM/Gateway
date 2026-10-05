@@ -19,12 +19,14 @@ variable "cloudflare_api_token" {
 variable "domain" {
   description = "Apex domain registered in Cloudflare, e.g. example.com."
   type        = string
+  sensitive   = true
 }
 
 variable "subdomain" {
   description = "Subdomain (label only) the gateway is served from. Final hostname is <subdomain>.<domain>."
   type        = string
   default     = "gw"
+  sensitive   = true
 }
 
 variable "location" {
@@ -49,6 +51,7 @@ variable "ws_path" {
   description = "WebSocket path that v2ray listens on behind Cloudflare."
   type        = string
   default     = "/stream"
+  sensitive   = true
 }
 
 variable "speedtest_mb" {

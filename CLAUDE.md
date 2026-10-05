@@ -94,7 +94,7 @@ hetzner/
   vice versa. They share zero state.
 - Don't add an ACM cert or paid TLS to the AWS stack — the point of it is "no
   domain required."
-- Don't move state to a remote backend without asking — local state is fine
-  for a single-operator hobby project.
+- State lives in Cloudflare R2: copy `hetzner/terraform/backend.hcl.example` to
+  `backend.hcl` (gitignored) and run `terraform init -backend-config=backend.hcl`.
 - Don't bake additional VMess clients into either config silently; that's a
   product decision, not a tidy-up.
