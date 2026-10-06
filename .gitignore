@@ -1,4 +1,11 @@
-.claude/
+# Local Claude settings stay untracked; the vendored Planzilla skills and agents are tracked.
+.claude/*
+!.claude/skills/
+!.claude/agents/
+.claude/skills/*
+!.claude/skills/plz-*/
+.claude/agents/*
+!.claude/agents/plz-*.md
 .vscode/
 .terraform/
 *.tfstate

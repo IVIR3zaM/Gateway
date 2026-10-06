@@ -31,7 +31,11 @@ hetzner/
   terraform/      Hetzner + Cloudflare root module.
   site/           Static site, baked into user-data and served from nginx.
   README.md       Token setup + DNS migration guide.
+.plan/            Planzilla plans (run with the plz-run-plan skill).
+.planzilla/       Vendored Planzilla; never hand-edited (see AGENTS.md).
 ```
+
+Planning: @AGENTS.md
 
 ## Things to know before changing code
 
