@@ -142,7 +142,7 @@ replaces anything, and rotating it is a manual step.
 
 ## State backend (Cloudflare R2)
 
-Gateway, Sonar and Kita share one private R2 bucket and one R2 API token
+Gateway, Sonar, Kita and Maghoul.Com share one private R2 bucket and one R2 API token
 (Object Read & Write on that bucket). Each project has its own key;
 Gateway's is `gateway/terraform.tfstate` (set in `providers.tf`). Terraform
 locks the state with a lock file next to it in the bucket, so a local run
@@ -235,7 +235,7 @@ v2rayNG / Shadowrocket / etc.
   no environment and no secret.
 - `apply` needs `validate` and runs in the `production` environment. It
   plans and applies `hetzner/terraform` on the R2 backend, then redeploys
-  Sonar and Kita if the VM was replaced.
+  Sonar, Kita and Maghoul.Com if the VM was replaced.
 
 Both jobs install the Terraform version from the root `.tool-versions`.
 
@@ -269,7 +269,7 @@ Set up once, in the repository settings:
    | `WS_PATH` | secret | `ws_path` |
    | `SSH_PRIVATE_KEY` | secret | written to a mode-600 file in the runner's temp dir; its path is `ssh_private_key_path` |
    | `SSH_PUBLIC_KEY` | variable | `ssh_public_key`; the key the VM trusts (the one in the state); it must match `SSH_PRIVATE_KEY` |
-   | `DISPATCH_TOKEN` | secret | `GH_TOKEN` for dispatching the Sonar and Kita deploys (see **App redeploys**) |
+   | `DISPATCH_TOKEN` | secret | `GH_TOKEN` for dispatching the Sonar, Kita and Maghoul.Com deploys (see **App redeploys**) |
    | `R2_ACCESS_KEY_ID` | secret | `AWS_ACCESS_KEY_ID` for the R2 backend |
    | `R2_SECRET_ACCESS_KEY` | secret | `AWS_SECRET_ACCESS_KEY` for the R2 backend |
    | `R2_ACCOUNT_ID` | variable | endpoint `https://<account-id>.r2.cloudflarestorage.com` in the generated `backend.hcl` |
@@ -311,26 +311,45 @@ How the apply job behaves:
 
 ### App redeploys
 
-A new VM has neither Sonar nor Kita installed. The job records the
+A new VM has none of Sonar, Kita or Maghoul.Com installed. The job records the
 `server_id` output before the plan and compares it after the apply; when it
-changed, or was unknown before, it dispatches both apps' `ci.yml` with
-`ref=main`, which reinstalls them on the new VM. A redundant dispatch only
-redeploys the same commit.
+changed, or was unknown before, it dispatches each repository's `ci.yml` with
+`--ref main`, which reinstalls them on the new VM. Sonar and Kita default their
+deployment `ref` input to `main`; Maghoul.Com uses the dispatched branch and
+keeps `bootstrap` and `migrate_dns` at their safe defaults (`false`). Its single
+workflow restores `maghoul.com`, `nika.maghoul.com` and `kian.maghoul.com`, including
+their DNS records. A redundant dispatch redeploys `main` again.
+
+All three dispatches are attempted even if one fails; a failed dispatch fails
+the Gateway job. Successful dispatches queue the downstream workflows; Gateway
+does not wait for their deployment results. Check each repository's Actions run
+to confirm recovery completed.
 
 `DISPATCH_TOKEN` is a fine-grained personal access token limited to the
-repositories Sonar and Kita, with **Actions: Read and write** and nothing
-else. Give it an expiry and renew it before it lapses; an expired token
-fails the dispatch step after a successful apply, and you then run
-`gh workflow run ci.yml -f ref=main` in each app's repository.
+repositories `IVIR3zaM/Sonar`, `IVIR3zaM/Kita` and `IVIR3zaM/Maghoul.Com`, with
+**Actions: Read and write** (plus GitHub's automatic Metadata read access).
+To extend the existing token, open GitHub **Settings → Developer settings →
+Personal access tokens → Fine-grained tokens**, select the token used by
+Gateway, edit its repository access and add `Maghoul.Com` while retaining
+Sonar and Kita. Save the change; editing repository access preserves the token
+value, so Gateway's `production` environment secret does not need updating.
+If you regenerate the token or create a replacement, update `DISPATCH_TOKEN`
+in that environment with the new value.
+
+Give it an expiry and renew it before it lapses; an expired token fails the
+dispatch step after a successful apply. To recover a missed dispatch, run
+`gh workflow run ci.yml --ref main -R IVIR3zaM/<repository>` for each affected
+repository. Maghoul.Com's state must already have been bootstrapped by its
+first deployment; normal recovery does not need bootstrap or DNS migration.
 
 ---
 
-## Coexistence with Sonar and Kita
+## Coexistence with Sonar, Kita and Maghoul.Com
 
-Sonar and Kita run on the same VM and keep their own state in the same R2
+Sonar, Kita and Maghoul.Com run on the same VM and keep their own state in the same R2
 bucket.
 
-- **Firewalls:** Sonar and Kita attach their own `sonar-ssh` and `kita-ssh`
+- **Firewalls:** Sonar, Kita and Maghoul.Com attach their own `sonar-ssh`, `kita-ssh` and `maghoul-ssh`
   firewalls to the server by label `project=gateway`.
   `ignore_remote_firewall_ids` on `hcloud_server.v2ray` keeps a Gateway
   apply from detaching them.
@@ -338,11 +357,11 @@ bucket.
   `project=gateway`. An app deploy in that window fails its
   exactly-one-server check before changing anything; re-run it once the old
   server is gone (the dispatch after the apply already runs after that).
-- **nginx:** the apps install `conf.d/sonar.conf` and `conf.d/kita.conf`,
+- **nginx:** the apps install `conf.d/sonar.conf`, `conf.d/kita.conf` and `conf.d/maghoul.conf`,
   which Gateway's `nginx.conf` includes. Together they must pass `nginx -t`;
-  keep server names and listen options compatible across the three projects
+  keep server names and listen options compatible across the four projects
   when changing the nginx config here.
-- **Lock:** local and CI runs of all three projects use the same bucket, and
+- **Lock:** local and CI runs of all four projects use the same bucket, and
   runs on the same state queue on its R2 lock (up to `-lock-timeout=10m`).
 
 ---

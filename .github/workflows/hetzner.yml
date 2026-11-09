@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       replace_server:
-        description: Replace the VM even when nothing changed (recovery; Sonar and Kita are redeployed after it)
+        description: Replace the VM even when nothing changed (recovery; Sonar, Kita and Maghoul.Com are redeployed after it)
         type: boolean
         default: false
 
@@ -229,13 +229,22 @@ jobs:
             echo "replaced=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # A new VM has neither app installed; a redundant dispatch is only a no-op redeploy.
-      - name: Redeploy Sonar and Kita
+      # A new VM has none of the apps installed; a redundant dispatch just redeploys main.
+      - name: Redeploy Sonar, Kita and Maghoul.Com
         if: steps.after.outputs.replaced == 'true'
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
           OWNER: ${{ github.repository_owner }}
         run: |
-          gh workflow run ci.yml -R "$OWNER/Sonar" -f ref=main
-          gh workflow run ci.yml -R "$OWNER/Kita" -f ref=main
-          echo "::notice::The VM was replaced or its previous server was unknown: dispatched the Sonar and Kita deploys."
+          failed=0
+          for repo in Sonar Kita Maghoul.Com; do
+            # --ref selects the workflow branch. Sonar/Kita default their ref input to main;
+            # Maghoul.Com has no ref input and keeps bootstrap/migrate_dns disabled by default.
+            if gh workflow run ci.yml -R "$OWNER/$repo" --ref main; then
+              echo "::notice::Dispatched $repo on main after VM replacement or an unknown previous server."
+            else
+              echo "::error::Could not dispatch $repo. Check DISPATCH_TOKEN repository access, Actions write permission and expiry."
+              failed=1
+            fi
+          done
+          exit "$failed"
